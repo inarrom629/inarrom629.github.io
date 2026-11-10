@@ -1,7 +1,11 @@
 // Pega aquí la URL del despliegue de Apps Script que termina en /exec.
 const API_URL = "https://script.google.com/macros/s/AKfycbyKeU7uiFLngk4tjYhwbYVJaH_j4GAu_E5m-2wXLRZwRpAJsv94VplIaEMD-7VuGV_f/exec";
 
+// Client ID de Google (Google Cloud Console → Credenciales → ID de cliente de OAuth, tipo "Aplicación web").
+const GOOGLE_CLIENT_ID = "PEGA_AQUI_TU_CLIENT_ID.apps.googleusercontent.com";
+
 const CACHE_PREFIX = "control-recreos:";
+const TOKEN_KEY = `${CACHE_PREFIX}id-token`;
 const SETTINGS_KEY = `${CACHE_PREFIX}settings-v2`;
 const TONE_VOLUME_KEY = `${CACHE_PREFIX}tone-volume`;
 const DEFAULT_SETTINGS = { redThreshold: 75, yellowGap: 15 };
@@ -40,7 +44,14 @@ const elements = {
   startRecessButton: document.querySelector("#startRecessButton"),
   pauseRecessButton: document.querySelector("#pauseRecessButton"),
   carryButton: document.querySelector("#carryButton"),
-  wakeLockNote: document.querySelector("#wakeLockNote")
+  wakeLockNote: document.querySelector("#wakeLockNote"),
+  loginBox: document.querySelector("#loginBox"),
+  googleButton: document.querySelector("#googleButton"),
+  loginMessage: document.querySelector("#loginMessage"),
+  appContent: document.querySelector("#appContent"),
+  userBox: document.querySelector("#userBox"),
+  userEmail: document.querySelector("#userEmail"),
+  logoutButton: document.querySelector("#logoutButton")
 };
 
 let groups = [];
@@ -76,6 +87,17 @@ let saveQueued = false;
 let groupLoadVersion = 0;
 let wakeLock = null;
 let wakeLockRequestVersion = 0;
+let idToken = "";
+let userEmail = "";
+let authenticated = false;
+let googleReady = false;
+
+class AuthError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
 
 function safeLocalStorageGet(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -131,20 +153,136 @@ function localGroups() {
   return [...new Set(found)].sort((first, second) => first.localeCompare(second, "es"));
 }
 
-function apiUrl(action, values = {}) {
-  if (!API_URL || API_URL.includes("PEGA_AQUI")) throw new Error("Falta configurar la URL del Web App en app.js.");
-  const url = new URL(API_URL);
-  url.searchParams.set("accion", action);
-  Object.entries(values).forEach(([key, value]) => url.searchParams.set(key, String(value)));
-  return url;
+function parseJwt(token) {
+  try {
+    const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+function tokenIsValid(token) {
+  const payload = parseJwt(token);
+  return Boolean(payload?.exp && payload.exp * 1000 > Date.now() + 30000);
 }
 
 async function requestApi(action, values = {}) {
-  const response = await fetch(apiUrl(action, values), { method: "GET", cache: "no-store" });
+  if (!API_URL || API_URL.includes("PEGA_AQUI")) throw new Error("Falta configurar la URL del Web App en app.js.");
+  if (!idToken || !tokenIsValid(idToken)) throw new AuthError("sesion_expirada", "Tu sesión ha caducado.");
+  // text/plain evita la petición previa (preflight) de CORS, que Apps Script no admite.
+  const response = await fetch(API_URL, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ accion: action, token: idToken, ...values })
+  });
   if (!response.ok) throw new Error(`El servidor respondió con estado ${response.status}.`);
   const result = await response.json();
-  if (result?.status === "error") throw new Error(result.mensaje || "Apps Script no pudo completar la operación.");
+  if (result?.status === "error") {
+    if (result.codigo === "sesion_expirada" || result.codigo === "no_autorizado") {
+      throw new AuthError(result.codigo, result.mensaje || "Acceso no permitido.");
+    }
+    throw new Error(result.mensaje || "Apps Script no pudo completar la operación.");
+  }
   return result;
+}
+
+// ---------- Inicio de sesión con Google ----------
+function applyAuthState() {
+  elements.loginBox.hidden = authenticated;
+  elements.loginBox.classList.toggle("is-banner", Boolean(selectedGroup));
+  elements.appContent.hidden = !authenticated && !selectedGroup;
+  elements.userBox.hidden = !authenticated;
+  elements.userEmail.textContent = userEmail;
+}
+
+function setSession(token) {
+  idToken = token;
+  userEmail = parseJwt(token)?.email || "";
+  authenticated = true;
+  try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* Sin almacenamiento de sesión. */ }
+  elements.loginMessage.textContent = "";
+  applyAuthState();
+}
+
+function clearSession(message = "") {
+  idToken = "";
+  userEmail = "";
+  authenticated = false;
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* Sin almacenamiento de sesión. */ }
+  elements.loginMessage.textContent = message;
+  applyAuthState();
+}
+
+function handleAuthError(error) {
+  const email = userEmail;
+  if (error.code === "no_autorizado") {
+    clearSession(`${email || "Esta cuenta"} no está en la lista de personal autorizado. Inicia sesión con otra cuenta de Google o pide que añadan tu correo.`);
+    try { google.accounts.id.disableAutoSelect(); } catch { /* Google aún no cargó. */ }
+  } else {
+    clearSession("Tu sesión ha caducado. Inicia sesión de nuevo para seguir sincronizando.");
+    if (googleReady) {
+      try { google.accounts.id.prompt(); } catch { /* El botón sigue disponible. */ }
+    }
+  }
+  setCloudStatus("☁️ Sin sesión; los cambios se guardan en este dispositivo", "error");
+}
+
+async function handleCredential(response) {
+  setSession(response.credential);
+  if (selectedGroup) scheduleCloudSave(0);
+  else await loadGroups();
+}
+
+function setupGoogle() {
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: handleCredential,
+    auto_select: true,
+    cancel_on_tap_outside: false
+  });
+  google.accounts.id.renderButton(elements.googleButton, { theme: "filled_blue", size: "large", text: "signin_with", locale: "es" });
+  googleReady = true;
+  if (!authenticated) google.accounts.id.prompt();
+}
+
+function waitForGoogle(attempt = 0) {
+  if (window.google?.accounts?.id) {
+    setupGoogle();
+    return;
+  }
+  if (attempt > 50) {
+    elements.loginMessage.textContent = "No se pudo cargar el inicio de sesión de Google. Comprueba la conexión y recarga la página.";
+    return;
+  }
+  window.setTimeout(() => waitForGoogle(attempt + 1), 200);
+}
+
+function initAuth() {
+  if (GOOGLE_CLIENT_ID.includes("PEGA_AQUI")) {
+    clearSession("Falta configurar GOOGLE_CLIENT_ID en app.js.");
+    return;
+  }
+  let stored = "";
+  try { stored = sessionStorage.getItem(TOKEN_KEY) || ""; } catch { /* Sin almacenamiento de sesión. */ }
+  if (stored && tokenIsValid(stored)) {
+    setSession(stored);
+    loadGroups();
+  } else {
+    clearSession();
+  }
+  waitForGoogle();
+}
+
+async function logout() {
+  if (recessRunning && !window.confirm("El descuento está en marcha. ¿Cerrar sesión igualmente?")) return;
+  detenerTono();
+  if (selectedGroup) await guardarEnNube();
+  try { google.accounts.id.disableAutoSelect(); } catch { /* Google aún no cargó. */ }
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* Sin almacenamiento de sesión. */ }
+  window.location.reload();
 }
 
 function setCloudStatus(message, state = "") {
@@ -419,9 +557,13 @@ async function guardarEnNube() {
     if (result?.status !== "ok") throw new Error("La hoja no confirmó el guardado.");
     if (groupToSave === selectedGroup && valueToSave === seconds) setCloudStatus("☁️ Guardado en la nube", "saved");
   } catch (error) {
-    setCloudStatus(`☁️ No se pudo guardar: ${error.message} Se reintentará.`, "error");
-    window.clearTimeout(saveTimeout);
-    saveTimeout = window.setTimeout(() => guardarEnNube(), 5000);
+    if (error instanceof AuthError) {
+      handleAuthError(error); // al volver a iniciar sesión se reenvía el guardado pendiente
+    } else {
+      setCloudStatus(`☁️ No se pudo guardar: ${error.message} Se reintentará.`, "error");
+      window.clearTimeout(saveTimeout);
+      saveTimeout = window.setTimeout(() => guardarEnNube(), 5000);
+    }
   } finally {
     saveInProgress = false;
     if (saveQueued) {
@@ -467,6 +609,11 @@ async function loadGroups() {
       setCloudStatus("☁️ Hoja conectada", "saved");
     }
   } catch (error) {
+    if (error instanceof AuthError) {
+      handleAuthError(error);
+      elements.groupStatus.textContent = "";
+      return;
+    }
     const cached = localGroups();
     groups = cached.map((grupo) => ({ grupo, segundos: readCachedGroup(grupo) || 0 }));
     renderGroups(cached);
@@ -514,7 +661,8 @@ async function selectGroup(group) {
     elements.groupStatus.textContent = `Tiempo cargado para ${group}.`;
   } catch (error) {
     if (requestVersion !== groupLoadVersion) return;
-    setCloudStatus("☁️ Usando datos locales", "error");
+    if (error instanceof AuthError) handleAuthError(error);
+    else setCloudStatus("☁️ Usando datos locales", "error");
     elements.groupStatus.textContent = `No se pudieron actualizar los datos (${error.message}); se usará la copia local de este dispositivo.`;
   }
   updateTimer();
@@ -738,6 +886,7 @@ async function refreshWakeLock() {
 }
 
 elements.retryButton.addEventListener("click", loadGroups);
+elements.logoutButton.addEventListener("click", logout);
 elements.groupSelect.addEventListener("change", (event) => selectGroup(event.target.value));
 elements.micButton.addEventListener("click", startMicrophone);
 elements.stopMicButton.addEventListener("click", () => stopMicrophone(true));
@@ -761,6 +910,7 @@ elements.yellowGap.value = String(settings.yellowGap);
 elements.redThreshold.addEventListener("input", saveSettings);
 elements.yellowGap.addEventListener("input", saveSettings);
 window.addEventListener("online", () => {
+  if (!authenticated) return;
   if (selectedGroup) scheduleCloudSave(0);
   else loadGroups();
 });
@@ -771,10 +921,15 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => {
   // Si recargas justo después de sumar tiempo, el guardado con retraso aún no se ha enviado.
-  if (!selectedGroup || !navigator.onLine) return;
+  if (!selectedGroup || !navigator.onLine || !idToken || !tokenIsValid(idToken)) return;
   try {
-    fetch(apiUrl("guardar", { grupo: selectedGroup, segundos: seconds }), { keepalive: true }).catch(() => {});
-  } catch { /* Sin URL configurada: no hay nada que enviar. */ }
+    fetch(API_URL, {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "guardar", token: idToken, grupo: selectedGroup, segundos: seconds })
+    }).catch(() => {});
+  } catch { /* No hay nada que enviar. */ }
 });
 window.addEventListener("beforeunload", () => {
   if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
@@ -786,4 +941,4 @@ updateRecessControls();
 createToneVolumeControl();
 setLight("green");
 intervalId = window.setInterval(tick, 200);
-loadGroups();
+initAuth();

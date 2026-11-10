@@ -8,6 +8,7 @@
   <title>Control de Recreos</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -19,6 +20,19 @@
       <div id="cloudStatus" class="cloud-status" role="status" aria-live="polite">☁️ Sin sincronizar</div>
     </header>
 
+    <section id="loginBox" class="panel login-box" aria-labelledby="loginHeading">
+      <h2 id="loginHeading">Acceso para el profesorado</h2>
+      <p class="helper-text">Entra con la cuenta de Google que tengas abierta en el navegador. Solo pueden acceder los correos del personal autorizado.</p>
+      <div id="googleButton" class="google-button"></div>
+      <p id="loginMessage" class="notice" role="status" aria-live="polite"></p>
+    </section>
+
+    <div id="userBox" class="user-box" hidden>
+      <span>Sesión: <strong id="userEmail"></strong></span>
+      <button id="logoutButton" class="button button-secondary" type="button">Cerrar sesión</button>
+    </div>
+
+    <div id="appContent" hidden>
     <section class="group-picker" aria-labelledby="groupHeading">
       <label id="groupHeading" for="groupSelect">Grupo</label>
       <div class="picker-row">
@@ -105,6 +119,7 @@
         </div>
         <p id="wakeLockNote" class="helper-text" aria-live="polite"></p>
       </section>
+    </div>
     </div>
   </main>
 </body>
