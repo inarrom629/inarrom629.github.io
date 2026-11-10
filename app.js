@@ -2,9 +2,13 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbyKeU7uiFLngk4tjYhwbYVJaH_j4GAu_E5m-2wXLRZwRpAJsv94VplIaEMD-7VuGV_f/exec";
 
 const CACHE_PREFIX = "control-recreos:";
-const SETTINGS_KEY = `${CACHE_PREFIX}settings`;
+const SETTINGS_KEY = `${CACHE_PREFIX}settings-v2`;
 const TONE_VOLUME_KEY = `${CACHE_PREFIX}tone-volume`;
-const DEFAULT_SETTINGS = { redThreshold: 20, yellowGap: 15 };
+const DEFAULT_SETTINGS = { redThreshold: 75, yellowGap: 15 };
+// El nivel del micrófono se mide en decibelios (escala logarítmica, como el oído).
+// -60 dBFS (casi silencio) = 0 %  ·  -10 dBFS (muy fuerte) = 100 %
+const MIN_DB = -60;
+const MAX_DB = -10;
 
 const elements = {
   groupSelect: document.querySelector("#groupSelect"),
@@ -376,9 +380,7 @@ function showManualNotice(message) {
 function addManualTime(amount) {
   if (!selectedGroup || recessRunning) return;
   setSeconds(seconds + amount);
-  const alreadyRed = currentNoiseState === "red";
-  setLight("red", true);
-  if (alreadyRed) iniciarTono("danger");
+  setLight("red"); // solo visual: el ajuste manual no hace sonar ningún pitido
   manualOverrideUntil = Date.now() + 4000;
   showManualNotice(`¡Se han sumado ${amount} segundos por ruido!`);
 }
@@ -478,6 +480,10 @@ async function selectGroup(group) {
   groupLoadVersion += 1;
   const requestVersion = groupLoadVersion;
   detenerTono();
+  if (selectedGroup && group !== selectedGroup) {
+    window.clearTimeout(saveTimeout);
+    await guardarEnNube(); // no perder cambios pendientes del grupo anterior
+  }
   if (microphoneActive) await stopMicrophone(true);
   if (requestVersion !== groupLoadVersion) return;
   selectedGroup = group;
@@ -526,7 +532,7 @@ async function startMicrophone() {
     const context = await ensureAudioContext();
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
     analyser = context.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 8192;
     audioSource = context.createMediaStreamSource(mediaStream);
     audioSource.connect(analyser);
     sampleBuffer = new Float32Array(analyser.fftSize);
@@ -574,6 +580,7 @@ async function stopMicrophone(save = true) {
   elements.micButton.hidden = false;
   elements.stopMicButton.hidden = true;
   elements.micState.textContent = "Modo manual";
+  updateMeter(0);
   if (!recessRunning) setLight("green");
   if (wasActive && save && selectedGroup) await guardarEnNube();
   refreshWakeLock();
@@ -585,7 +592,12 @@ function sampleMicrophone() {
   let sumSquares = 0;
   for (let index = 0; index < sampleBuffer.length; index += 1) sumSquares += sampleBuffer[index] * sampleBuffer[index];
   const rms = Math.sqrt(sumSquares / sampleBuffer.length);
-  updateMeter(rms * 100);
+  const db = 20 * Math.log10(Math.max(rms, 0.00001));
+  const rawLevel = Math.max(0, Math.min(100, ((db - MIN_DB) / (MAX_DB - MIN_DB)) * 100));
+  // Sube al instante y baja despacio: así un pico de ruido dura lo suficiente
+  // para que lo vea la comprobación de cada segundo.
+  const smoothed = rawLevel > latestLevel ? rawLevel : latestLevel * 0.8 + rawLevel * 0.2;
+  updateMeter(smoothed);
 }
 
 function tick() {
@@ -742,6 +754,8 @@ function saveSettings() {
   if (microphoneActive && Date.now() >= manualOverrideUntil) classifyNoise();
 }
 
+elements.redThreshold.min = "10";
+elements.redThreshold.max = "100";
 elements.redThreshold.value = String(settings.redThreshold);
 elements.yellowGap.value = String(settings.yellowGap);
 elements.redThreshold.addEventListener("input", saveSettings);
@@ -754,6 +768,13 @@ window.addEventListener("offline", () => setCloudStatus("☁️ Sin conexión; l
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") detenerTono();
   if (document.visibilityState === "visible") refreshWakeLock();
+});
+window.addEventListener("pagehide", () => {
+  // Si recargas justo después de sumar tiempo, el guardado con retraso aún no se ha enviado.
+  if (!selectedGroup || !navigator.onLine) return;
+  try {
+    fetch(apiUrl("guardar", { grupo: selectedGroup, segundos: seconds }), { keepalive: true }).catch(() => {});
+  } catch { /* Sin URL configurada: no hay nada que enviar. */ }
 });
 window.addEventListener("beforeunload", () => {
   if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
