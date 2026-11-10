@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121212">
+  <meta name="description" content="Semáforo de ruido y control del tiempo de recreo del aula.">
+  <title>Control de Recreos</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">AULA · CONTROL DE SONIDO</p>
+        <h1>Control de Recreos</h1>
+      </div>
+      <div id="cloudStatus" class="cloud-status" role="status" aria-live="polite">☁️ Sin sincronizar</div>
+    </header>
+
+    <section class="group-picker" aria-labelledby="groupHeading">
+      <label id="groupHeading" for="groupSelect">Grupo</label>
+      <div class="picker-row">
+        <select id="groupSelect" aria-label="Seleccionar grupo" disabled>
+          <option value="">Cargando grupos...</option>
+        </select>
+        <button id="retryButton" class="button button-secondary" type="button" hidden>↻ Reintentar</button>
+      </div>
+      <p id="groupStatus" class="helper-text" role="status" aria-live="polite">Conectando con la hoja de cálculo...</p>
+    </section>
+
+    <div id="workspace" class="workspace" hidden>
+      <section class="panel class-panel" aria-labelledby="classHeading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">EN CLASE</p>
+            <h2 id="classHeading">Semáforo del ruido</h2>
+          </div>
+          <span id="micState" class="state-chip">Modo manual</span>
+        </div>
+
+        <div class="traffic-wrap">
+          <div id="trafficLight" class="traffic-light" data-state="green" role="img" aria-label="Semáforo verde: nivel de ruido bajo">
+            <span class="light light-red" aria-hidden="true"></span>
+            <span class="light light-yellow" aria-hidden="true"></span>
+            <span class="light light-green active" aria-hidden="true"></span>
+          </div>
+          <div class="meter-column">
+            <div class="meter-labels"><span>Nivel actual</span><strong id="levelText">0%</strong></div>
+            <div class="meter-track" role="progressbar" aria-label="Nivel de sonido detectado" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <span id="volumeBar" class="meter-fill"></span>
+              <span id="yellowMarker" class="meter-marker" aria-hidden="true"></span>
+              <span id="redMarker" class="meter-marker meter-marker-red" aria-hidden="true"></span>
+            </div>
+            <p id="noiseLabel" class="noise-label">Ruido bajo</p>
+          </div>
+        </div>
+
+        <div class="mic-controls">
+          <button id="micButton" class="button button-primary" type="button">🎙️ Iniciar Micro Automático</button>
+          <button id="stopMicButton" class="button button-secondary" type="button" hidden>■ Detener micrófono</button>
+        </div>
+        <p id="micMessage" class="notice" role="status" aria-live="polite" hidden></p>
+
+        <details class="settings">
+          <summary>Ajustar sensibilidad</summary>
+          <div class="setting-row">
+            <label for="redThreshold">Umbral rojo <output id="redThresholdValue" for="redThreshold">20%</output></label>
+            <input id="redThreshold" type="range" min="1" max="80" value="20">
+          </div>
+          <div class="setting-row">
+            <label for="yellowGap">Separación del amarillo <output id="yellowGapValue" for="yellowGap">15%</output></label>
+            <input id="yellowGap" type="range" min="1" max="40" value="15">
+          </div>
+          <p class="helper-text">El amarillo se activa por debajo del umbral rojo. Ajusta mientras observas la barra.</p>
+        </details>
+
+        <div class="manual-controls" aria-label="Ajustes manuales del castigo">
+          <h3>Ajuste manual</h3>
+          <div class="button-grid">
+            <button class="button button-danger" data-add="10" type="button">+10 segundos</button>
+            <button class="button button-danger" data-add="30" type="button">+30 segundos</button>
+            <button class="button button-danger" data-add="60" type="button">+1 minuto</button>
+            <button id="subtractButton" class="button button-secondary" type="button">− Restar 10 segundos</button>
+          </div>
+          <p id="manualMessage" class="notice" role="status" aria-live="polite" hidden></p>
+        </div>
+      </section>
+
+      <section class="panel recess-panel" aria-labelledby="recessHeading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">TIEMPO ACUMULADO</p>
+            <h2 id="recessHeading">Modo Recreo</h2>
+          </div>
+        </div>
+        <p id="selectedGroupLabel" class="selected-group"></p>
+        <div id="timer" class="timer" role="timer" aria-label="Tiempo acumulado">00:00</div>
+        <p id="recessMessage" class="recess-message" role="status" aria-live="polite">El grupo está en clase.</p>
+        <div class="recess-controls">
+          <button id="startRecessButton" class="button button-primary button-large" type="button" disabled>▶️ Iniciar Descuento</button>
+          <button id="pauseRecessButton" class="button button-danger button-large" type="button" hidden>⏸️ Pausar (¡Están hablando!)</button>
+          <button id="carryButton" class="button button-secondary" type="button" hidden>💾 Pasar tiempo restante a mañana</button>
+        </div>
+        <p id="wakeLockNote" class="helper-text" aria-live="polite"></p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
