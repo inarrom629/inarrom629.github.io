@@ -1,8 +1,8 @@
 // Pega aquí la URL del despliegue de Apps Script que termina en /exec.
-const API_URL = "https://script.google.com/macros/s/AKfycbxzhz1lk1rvymJ1efb7xLJe3JV7cY_h1davaQ8bFHjngazAgQ_Z5kNWL0_n2POcGMeK/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyKeU7uiFLngk4tjYhwbYVJaH_j4GAu_E5m-2wXLRZwRpAJsv94VplIaEMD-7VuGV_f/exec";
 
 // Client ID de Google (Google Cloud Console → Credenciales → ID de cliente de OAuth, tipo "Aplicación web").
-const GOOGLE_CLIENT_ID = "236441999538-2e43bndqv3gq2g34damvahkmbv0pjfll.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "PEGA_AQUI_TU_CLIENT_ID.apps.googleusercontent.com";
 
 const CACHE_PREFIX = "control-recreos:";
 const TOKEN_KEY = `${CACHE_PREFIX}id-token`;
@@ -13,6 +13,13 @@ const DEFAULT_SETTINGS = { redThreshold: 75, yellowGap: 15 };
 // -60 dBFS (casi silencio) = 0 %  ·  -10 dBFS (muy fuerte) = 100 %
 const MIN_DB = -60;
 const MAX_DB = -10;
+
+// Pitidos de aviso: tiempo entre un pitido y el siguiente (ms). Cámbialos aquí si quieres.
+const WARNING_BEEP_INTERVAL_MS = 4000; // luz amarilla
+const DANGER_BEEP_INTERVAL_MS = 4000;  // luz roja
+// El micrófono se ignora mientras suena el pitido y este margen posterior (ms),
+// para que el medidor no confunda el pitido con ruido de la clase.
+const BEEP_MIC_MUTE_TAIL_MS = 450;
 
 const elements = {
   groupSelect: document.querySelector("#groupSelect"),
@@ -63,6 +70,7 @@ let toneMasterGain = null;
 let activeToneOscillators = new Set();
 let activeToneInterval = 0;
 let activeToneTimeout = 0;
+let beepMutedUntil = 0;
 let toneRequestId = 0;
 let toneVolume = loadToneVolume();
 let mediaStream = null;
@@ -386,8 +394,8 @@ async function iniciarTono(tipo) {
   if (recessRunning || document.hidden || currentNoiseState !== expectedState) return;
 
   const preset = tipo === "warning"
-    ? { wave: "sine", frequency: 300, volume: 0.12, duration: 0.25, interval: 1000 }
-    : { wave: "square", frequency: 800, volume: 0.2, duration: 0.15, interval: 400 };
+    ? { wave: "sine", frequency: 300, volume: 0.12, duration: 0.25, interval: WARNING_BEEP_INTERVAL_MS }
+    : { wave: "square", frequency: 800, volume: 0.2, duration: 0.15, interval: DANGER_BEEP_INTERVAL_MS };
   activeToneTimeout = window.setTimeout(() => {
     if (requestId === toneRequestId) detenerTono();
   }, 10000);
@@ -406,6 +414,7 @@ async function iniciarTono(tipo) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
       const now = context.currentTime;
+      beepMutedUntil = Date.now() + preset.duration * 1000 + BEEP_MIC_MUTE_TAIL_MS;
       oscillator.type = preset.wave;
       oscillator.frequency.setValueAtTime(preset.frequency, now);
       gain.gain.setValueAtTime(0, now);
@@ -741,6 +750,7 @@ async function stopMicrophone(save = true) {
 
 function sampleMicrophone() {
   if (!microphoneActive || !analyser || !sampleBuffer) return;
+  if (Date.now() < beepMutedUntil) return; // suena un pitido: se mantiene la última lectura real
   analyser.getFloatTimeDomainData(sampleBuffer);
   let sumSquares = 0;
   for (let index = 0; index < sampleBuffer.length; index += 1) sumSquares += sampleBuffer[index] * sampleBuffer[index];
