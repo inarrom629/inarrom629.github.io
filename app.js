@@ -1,8 +1,6 @@
-// Pega aquí la URL del despliegue de Apps Script que termina en /exec.
-const API_URL = "https://script.google.com/macros/s/AKfycbyKeU7uiFLngk4tjYhwbYVJaH_j4GAu_E5m-2wXLRZwRpAJsv94VplIaEMD-7VuGV_f/exec";
-
-// Client ID de Google (Google Cloud Console → Credenciales → ID de cliente de OAuth, tipo "Aplicación web").
-const GOOGLE_CLIENT_ID = "PEGA_AQUI_TU_CLIENT_ID.apps.googleusercontent.com";
+// La URL de Apps Script y el Client ID de Google se configuran en config.js (no aquí).
+const API_URL = window.APP_CONFIG?.API_URL || "";
+const GOOGLE_CLIENT_ID = window.APP_CONFIG?.GOOGLE_CLIENT_ID || "PEGA_AQUI";
 
 const CACHE_PREFIX = "control-recreos:";
 const TOKEN_KEY = `${CACHE_PREFIX}id-token`;
@@ -177,7 +175,7 @@ function tokenIsValid(token) {
 }
 
 async function requestApi(action, values = {}) {
-  if (!API_URL || API_URL.includes("PEGA_AQUI")) throw new Error("Falta configurar la URL del Web App en app.js.");
+  if (!API_URL || API_URL.includes("PEGA_AQUI")) throw new Error("Falta configurar API_URL en config.js.");
   if (!idToken || !tokenIsValid(idToken)) throw new AuthError("sesion_expirada", "Tu sesión ha caducado.");
   // text/plain evita la petición previa (preflight) de CORS, que Apps Script no admite.
   let response;
@@ -275,7 +273,7 @@ function waitForGoogle(attempt = 0) {
 
 function initAuth() {
   if (GOOGLE_CLIENT_ID.includes("PEGA_AQUI")) {
-    clearSession("Falta configurar GOOGLE_CLIENT_ID en app.js.");
+    clearSession("Falta configurar GOOGLE_CLIENT_ID en config.js.");
     return;
   }
   let stored = "";
