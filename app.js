@@ -172,12 +172,17 @@ async function requestApi(action, values = {}) {
   if (!API_URL || API_URL.includes("PEGA_AQUI")) throw new Error("Falta configurar la URL del Web App en app.js.");
   if (!idToken || !tokenIsValid(idToken)) throw new AuthError("sesion_expirada", "Tu sesión ha caducado.");
   // text/plain evita la petición previa (preflight) de CORS, que Apps Script no admite.
-  const response = await fetch(API_URL, {
-    method: "POST",
-    cache: "no-store",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ accion: action, token: idToken, ...values })
-  });
+  let response;
+  try {
+    response = await fetch(API_URL, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: action, token: idToken, ...values })
+    });
+  } catch {
+    throw new Error("Apps Script no responde. Abre la URL de API_URL con ?diagnostico=1 al final para ver qué falla");
+  }
   if (!response.ok) throw new Error(`El servidor respondió con estado ${response.status}.`);
   const result = await response.json();
   if (result?.status === "error") {

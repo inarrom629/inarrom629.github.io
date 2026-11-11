@@ -7,8 +7,31 @@ var AUTH_SPREADSHEET_ID = "1LQTuX6sMZ8AJkhrLT2-1wH9py5M93MOil5duoU9raX0";
 var AUTH_SHEET_NAME = "Ajustes";
 // Los grupos y sus segundos siguen en la PRIMERA pestaña de ESTA hoja (A = grupo, B = segundos).
 
-function doGet() {
-  return ContentService.createTextOutput("Conexión Activa").setMimeType(ContentService.MimeType.TEXT);
+// Abre la URL /exec en el navegador: debe mostrar "Conexión Activa · v2".
+// Con ?diagnostico=1 al final muestra además el estado de los permisos y de las hojas.
+function doGet(e) {
+  var texto = "Conexión Activa · v2 con inicio de sesión";
+  if (e && e.parameter && e.parameter.diagnostico === "1") {
+    texto += "\nClient ID configurado: " + (CLIENT_ID.indexOf("PEGA_AQUI") === -1 ? "sí" : "NO (falta pegarlo en Codigo.gs)");
+    try {
+      UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo", { muteHttpExceptions: true });
+      texto += "\nPermiso de conexión externa: OK";
+    } catch (error) {
+      texto += "\nPermiso de conexión externa: ERROR (" + error.message + ")";
+    }
+    try {
+      texto += "\nCorreos autorizados leídos de «" + AUTH_SHEET_NAME + "»: " + readAuthorizedEmails().length;
+    } catch (error) {
+      texto += "\nLista de autorizados: ERROR (" + error.message + ")";
+    }
+    try {
+      var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+      texto += "\nHoja de grupos: «" + groupsSheet.getName() + "» con " + Math.max(0, groupsSheet.getLastRow() - 1) + " filas de datos";
+    } catch (error) {
+      texto += "\nHoja de grupos: ERROR (" + error.message + ")";
+    }
+  }
+  return ContentService.createTextOutput(texto).setMimeType(ContentService.MimeType.TEXT);
 }
 
 function doPost(e) {
