@@ -1,6 +1,6 @@
 // ====== CONFIGURACIÓN ======
 // El mismo Client ID que pegas en app.js (GOOGLE_CLIENT_ID).
-var CLIENT_ID = "1LQTuX6sMZ8AJkhrLT2-1wH9py5M93MOil5duoU9raX0.apps.googleusercontent.com";
+var CLIENT_ID = "236441999538-2e43bndqv3gq2g34damvahkmbv0pjfll.apps.googleusercontent.com";
 // Hoja de cálculo con el personal autorizado: pestaña "Ajustes",
 // columna A = nombre, columna B = correo.
 var AUTH_SPREADSHEET_ID = "1LQTuX6sMZ8AJkhrLT2-1wH9py5M93MOil5duoU9raX0";
