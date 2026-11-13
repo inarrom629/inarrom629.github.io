@@ -146,3 +146,5 @@ select { width: 100%; min-height: 50px; border: 1px solid #555; border-radius: 6
 .auto-recess .button { width: 100%; }
 .auto-level { display: grid; gap: 6px; font-size: .95rem; }
 .auto-recess .helper-text { margin: 0; }
+
+.version-label { margin: 28px 0 0; color: #777; font-size: .78rem; text-align: center; }

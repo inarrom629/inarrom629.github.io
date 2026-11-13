@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#121212">
   <meta name="description" content="Semáforo de ruido y control del tiempo de recreo del aula.">
   <title>Control de Recreos</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="config.js"></script>
-  <script src="app.js" defer></script>
+  <link rel="stylesheet" href="style.css?v=3">
+  <script src="config.js?v=3"></script>
+  <script src="app.js?v=3" defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -73,7 +73,7 @@
         </div>
 
         <div class="mic-controls">
-          <button id="micButton" class="button button-primary" type="button">🎙️ Iniciar Micro Automático</button>
+          <button id="micButton" class="button button-primary" type="button">🎙️ Iniciar micrófono</button>
           <button id="stopMicButton" class="button button-secondary" type="button" hidden>■ Detener micrófono</button>
         </div>
         <p id="micMessage" class="notice" role="status" aria-live="polite" hidden></p>
@@ -120,7 +120,6 @@
         <div class="recess-controls">
           <button id="startRecessButton" class="button button-primary button-large" type="button" disabled>▶️ Iniciar Descuento</button>
           <button id="pauseRecessButton" class="button button-danger button-large" type="button" hidden>⏸️ Pausar (¡Están hablando!)</button>
-          <button id="carryButton" class="button button-secondary" type="button" hidden>💾 Pasar tiempo restante a mañana</button>
         </div>
         <div class="auto-recess">
           <button id="autoRecessButton" class="button button-secondary" type="button" aria-pressed="false">🤖 Descuento automático: desactivado</button>
@@ -135,6 +134,7 @@
         <p id="wakeLockNote" class="helper-text" aria-live="polite"></p>
       </section>
     </div>
+    <p id="versionLabel" class="version-label"></p>
     </div>
   </main>
 </body>

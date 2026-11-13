@@ -2,6 +2,7 @@
 const API_URL = window.APP_CONFIG?.API_URL || "";
 const GOOGLE_CLIENT_ID = window.APP_CONFIG?.GOOGLE_CLIENT_ID || "PEGA_AQUI";
 
+const APP_VERSION = "v3 · 13 nov 2026";
 const CACHE_PREFIX = "control-recreos:";
 const TOKEN_KEY = `${CACHE_PREFIX}id-token`;
 const SETTINGS_KEY = `${CACHE_PREFIX}settings-v2`;
@@ -50,7 +51,6 @@ const elements = {
   recessMessage: document.querySelector("#recessMessage"),
   startRecessButton: document.querySelector("#startRecessButton"),
   pauseRecessButton: document.querySelector("#pauseRecessButton"),
-  carryButton: document.querySelector("#carryButton"),
   wakeLockNote: document.querySelector("#wakeLockNote"),
   loginBox: document.querySelector("#loginBox"),
   googleButton: document.querySelector("#googleButton"),
@@ -538,7 +538,6 @@ function updateRecessControls() {
   elements.startRecessButton.textContent = recessPaused ? "▶️ Reanudar (Ya están callados)" : "▶️ Iniciar Descuento";
   elements.startRecessButton.hidden = recessRunning;
   elements.pauseRecessButton.hidden = !recessRunning;
-  elements.carryButton.hidden = seconds <= 0;
   elements.groupSelect.disabled = recessRunning || groups.length === 0;
 }
 
@@ -727,7 +726,7 @@ async function selectGroup(group) {
 }
 
 async function startMicrophone() {
-  if (!selectedGroup || microphoneActive || (recessRunning && !settings.autoRecess)) return;
+  if (!selectedGroup || microphoneActive) return;
   if (!navigator.mediaDevices?.getUserMedia) {
     showMicPermissionHelp("Este navegador no ofrece acceso al micrófono. Usa la aplicación desde HTTPS en una versión actualizada del navegador.");
     return;
@@ -752,7 +751,9 @@ async function startMicrophone() {
     elements.stopMicButton.hidden = false;
     elements.micMessage.hidden = true;
     elements.micState.textContent = "Micrófono activo";
-    elements.groupStatus.textContent = "Micrófono activo; el castigo se acumula al detectar ruido alto.";
+    elements.groupStatus.textContent = recessRunning
+      ? "Micrófono activo durante el descuento."
+      : "Micrófono activo; el castigo se acumula al detectar ruido alto.";
     refreshWakeLock();
   } catch (error) {
     await stopMicrophone(false);
@@ -846,7 +847,7 @@ function tick() {
       noiseRemainderMs = elapsed % 1000;
       lastNoiseAt = now;
       if (recessRunning) {
-        if (settings.autoRecess) evaluateAutoRecess();
+        evaluateAutoRecess();
       } else {
         if (now >= manualOverrideUntil) classifyNoise();
         if (currentNoiseState === "red" && now >= manualOverrideUntil) {
@@ -868,6 +869,7 @@ function tick() {
 function evaluateAutoRecess() {
   const state = noiseStateForLevel(latestLevel);
   setLight(state); // solo visual: durante el recreo no suenan pitidos continuos
+  if (!settings.autoRecess) return; // sin descuento automático, el micrófono solo informa
   const tooLoud = settings.autoPauseOn === "yellow" ? state !== "green" : state === "red";
   if (tooLoud) {
     autoQuietSeconds = 0;
@@ -929,13 +931,8 @@ async function startOrResumeRecess() {
   recessAutoHold = false;
   autoQuietSeconds = 0;
   detenerTono();
-  let automated = false;
-  if (settings.autoRecess) {
-    if (!microphoneActive) await startMicrophone();
-    automated = microphoneActive;
-  } else {
-    await stopMicrophone(true);
-  }
+  if (settings.autoRecess && !microphoneActive) await startMicrophone();
+  const automated = settings.autoRecess && microphoneActive;
   if (recessRunning || seconds <= 0) return;
   recessRunning = true;
   recessPaused = false;
@@ -943,7 +940,7 @@ async function startOrResumeRecess() {
   lastRecessSavedAt = Date.now();
   lastNoiseAt = Date.now();
   noiseRemainderMs = 0;
-  setLight(automated ? noiseStateForLevel(latestLevel) : "red");
+  setLight(microphoneActive ? noiseStateForLevel(latestLevel) : "red");
   if (automated) {
     elements.groupStatus.textContent = "Descuento automático: el micrófono pausa el descuento si hay ruido.";
     setRecessMessage("Descuento automático en curso: se pausa solo si hay ruido.");
@@ -992,28 +989,6 @@ function completeRecess() {
   refreshWakeLock();
 }
 
-async function carryTimeToTomorrow() {
-  if (!selectedGroup || seconds <= 0) return;
-  const remaining = currentRecessRemaining();
-  if (remaining <= 0) {
-    completeRecess();
-    return;
-  }
-  const accepted = window.confirm(`Se conservarán ${formatSeconds(remaining)} como tiempo pendiente para mañana. ¿Continuar?`);
-  if (!accepted) return;
-  detenerTono();
-  endRecessRun();
-  recessPaused = false;
-  seconds = remaining;
-  updateTimer();
-  updateRecessControls();
-  setLight("green");
-  refreshWakeLock();
-  await guardarEnNube();
-  setRecessMessage(`Tiempo restante conservado para mañana: ${formatSeconds(seconds)}.`);
-  updateRecessControls();
-}
-
 function formatSeconds(value) {
   return `${Math.floor(value / 60)}:${(value % 60).toString().padStart(2, "0")}`;
 }
@@ -1056,7 +1031,6 @@ elements.micButton.addEventListener("click", startMicrophone);
 elements.stopMicButton.addEventListener("click", () => stopMicrophone(true));
 elements.startRecessButton.addEventListener("click", startOrResumeRecess);
 elements.pauseRecessButton.addEventListener("click", pauseRecess);
-elements.carryButton.addEventListener("click", carryTimeToTomorrow);
 elements.subtractButton.addEventListener("click", subtractManualTime);
 document.querySelectorAll("[data-add]").forEach((button) => button.addEventListener("click", () => addManualTime(Number(button.dataset.add))));
 
@@ -1074,7 +1048,7 @@ function saveSettings() {
   updateMeter(latestLevel);
   if (microphoneActive) {
     if (recessRunning) {
-      if (settings.autoRecess) setLight(noiseStateForLevel(latestLevel));
+      setLight(noiseStateForLevel(latestLevel));
     } else if (Date.now() >= manualOverrideUntil) {
       classifyNoise();
     }
@@ -1120,6 +1094,8 @@ window.addEventListener("beforeunload", () => {
   if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
 });
 
+const versionLabel = document.querySelector("#versionLabel");
+if (versionLabel) versionLabel.textContent = `Versión ${APP_VERSION}`;
 updateMeter(0);
 updateTimer();
 updateRecessControls();
