@@ -81,6 +81,10 @@
         <details class="settings">
           <summary>Ajustar sensibilidad</summary>
           <div class="setting-row">
+            <label for="micGain">Sensibilidad del micrófono <output id="micGainValue" for="micGain">0 dB</output></label>
+            <input id="micGain" type="range" min="-50" max="20" step="1" value="0">
+          </div>
+          <div class="setting-row">
             <label for="redThreshold">Umbral rojo <output id="redThresholdValue" for="redThreshold">20%</output></label>
             <input id="redThreshold" type="range" min="1" max="80" value="20">
           </div>
@@ -88,7 +92,7 @@
             <label for="yellowGap">Separación del amarillo <output id="yellowGapValue" for="yellowGap">15%</output></label>
             <input id="yellowGap" type="range" min="1" max="40" value="15">
           </div>
-          <p class="helper-text">El amarillo se activa por debajo del umbral rojo. Ajusta mientras observas la barra.</p>
+          <p class="helper-text">Si la barra llega al máximo con poco ruido, baja la sensibilidad del micrófono; si apenas se mueve, súbela. El amarillo se activa por debajo del umbral rojo. Ajusta mientras observas la barra: los cambios se aplican al instante, también durante el descuento.</p>
         </details>
 
         <div class="manual-controls" aria-label="Ajustes manuales del castigo">
@@ -117,6 +121,16 @@
           <button id="startRecessButton" class="button button-primary button-large" type="button" disabled>▶️ Iniciar Descuento</button>
           <button id="pauseRecessButton" class="button button-danger button-large" type="button" hidden>⏸️ Pausar (¡Están hablando!)</button>
           <button id="carryButton" class="button button-secondary" type="button" hidden>💾 Pasar tiempo restante a mañana</button>
+        </div>
+        <div class="auto-recess">
+          <button id="autoRecessButton" class="button button-secondary" type="button" aria-pressed="false">🤖 Descuento automático: desactivado</button>
+          <label class="auto-level" for="autoPauseLevel">Pausar el descuento con ruido
+            <select id="autoPauseLevel">
+              <option value="red">alto (luz roja)</option>
+              <option value="yellow">medio o alto (luz amarilla o roja)</option>
+            </select>
+          </label>
+          <p class="helper-text">Usa el micrófono y los mismos umbrales de «Ajustar sensibilidad» (panel de clase), que puedes cambiar en cualquier momento. Tras una pausa, el descuento se reanuda solo cuando hay unos segundos de silencio.</p>
         </div>
         <p id="wakeLockNote" class="helper-text" aria-live="polite"></p>
       </section>

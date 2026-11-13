@@ -128,3 +128,21 @@ select { width: 100%; min-height: 50px; border: 1px solid #555; border-radius: 6
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+/* --- Inicio de sesión --- */
+.notice:empty { display: none; }
+.login-box { max-width: 520px; margin: 32px auto; text-align: center; }
+.login-box .helper-text { margin: 10px 0 0; }
+.google-button { display: flex; justify-content: center; min-height: 44px; margin-top: 18px; }
+.login-box.is-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 18px; max-width: none; margin: 16px 0 0; padding: 14px 18px; text-align: left; }
+.login-box.is-banner h2 { font-size: 1.05rem; }
+.login-box.is-banner .helper-text, .login-box.is-banner .google-button { margin: 0; }
+.login-box.is-banner .notice { flex-basis: 100%; margin: 0; }
+.user-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding-top: 14px; color: var(--muted); font-size: .92rem; }
+.user-box strong { color: var(--text); }
+.user-box .button { min-height: 38px; padding: 6px 12px; }
+
+/* --- Descuento automático --- */
+.auto-recess { display: grid; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); text-align: left; }
+.auto-recess .button { width: 100%; }
+.auto-level { display: grid; gap: 6px; font-size: .95rem; }
+.auto-recess .helper-text { margin: 0; }

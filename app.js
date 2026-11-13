@@ -6,7 +6,7 @@ const CACHE_PREFIX = "control-recreos:";
 const TOKEN_KEY = `${CACHE_PREFIX}id-token`;
 const SETTINGS_KEY = `${CACHE_PREFIX}settings-v2`;
 const TONE_VOLUME_KEY = `${CACHE_PREFIX}tone-volume`;
-const DEFAULT_SETTINGS = { redThreshold: 75, yellowGap: 15 };
+const DEFAULT_SETTINGS = { redThreshold: 75, yellowGap: 15, micGainDb: 0, autoRecess: false, autoPauseOn: "red" };
 // El nivel del micrófono se mide en decibelios (escala logarítmica, como el oído).
 // -60 dBFS (casi silencio) = 0 %  ·  -10 dBFS (muy fuerte) = 100 %
 const MIN_DB = -60;
@@ -18,6 +18,8 @@ const DANGER_BEEP_INTERVAL_MS = 4000;  // luz roja
 // El micrófono se ignora mientras suena el pitido y este margen posterior (ms),
 // para que el medidor no confunda el pitido con ruido de la clase.
 const BEEP_MIC_MUTE_TAIL_MS = 450;
+// Descuento automático: segundos seguidos de silencio necesarios para reanudar tras una pausa por ruido.
+const AUTO_RESUME_QUIET_SECONDS = 3;
 
 const elements = {
   groupSelect: document.querySelector("#groupSelect"),
@@ -56,7 +58,11 @@ const elements = {
   appContent: document.querySelector("#appContent"),
   userBox: document.querySelector("#userBox"),
   userEmail: document.querySelector("#userEmail"),
-  logoutButton: document.querySelector("#logoutButton")
+  logoutButton: document.querySelector("#logoutButton"),
+  micGain: document.querySelector("#micGain"),
+  micGainValue: document.querySelector("#micGainValue"),
+  autoRecessButton: document.querySelector("#autoRecessButton"),
+  autoPauseLevel: document.querySelector("#autoPauseLevel")
 };
 
 let groups = [];
@@ -97,6 +103,11 @@ let idToken = "";
 let userEmail = "";
 let authenticated = false;
 let googleReady = false;
+let micGainNode = null;
+let recessAutoHold = false;   // true = el descuento está en pausa automática por ruido
+let recessPaused = false;     // true = el profesor pulsó pausa (el botón pasa a "Reanudar")
+let autoQuietSeconds = 0;
+let lastTickAt = Date.now();
 
 class AuthError extends Error {
   constructor(code, message) {
@@ -329,11 +340,41 @@ function updateMeter(level) {
   elements.yellowGapValue.textContent = `${Number(elements.yellowGap.value)}%`;
 }
 
-function classifyNoise() {
+function noiseStateForLevel(level) {
   const red = Number(elements.redThreshold.value);
   const yellow = Math.max(0, red - Number(elements.yellowGap.value));
-  const state = latestLevel >= red ? "red" : latestLevel >= yellow ? "yellow" : "green";
-  setLight(state, true);
+  return level >= red ? "red" : level >= yellow ? "yellow" : "green";
+}
+
+function classifyNoise() {
+  setLight(noiseStateForLevel(latestLevel), true);
+}
+
+function dbToGain(db) {
+  return Math.pow(10, db / 20);
+}
+
+function applyMicGain() {
+  if (micGainNode && audioContext) micGainNode.gain.setTargetAtTime(dbToGain(settings.micGainDb), audioContext.currentTime, 0.05);
+}
+
+function updateMicGainLabel() {
+  const db = Number(elements.micGain.value);
+  const text = `${db > 0 ? "+" : ""}${db} dB`;
+  elements.micGainValue.value = text;
+  elements.micGainValue.textContent = text;
+}
+
+function persistSettings() {
+  safeLocalStorageSet(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function updateAutoRecessUi() {
+  const on = Boolean(settings.autoRecess);
+  elements.autoRecessButton.setAttribute("aria-pressed", String(on));
+  elements.autoRecessButton.textContent = on ? "🤖 Descuento automático: ACTIVADO" : "🤖 Descuento automático: desactivado";
+  elements.autoRecessButton.classList.toggle("button-primary", on);
+  elements.autoRecessButton.classList.toggle("button-secondary", !on);
 }
 
 async function ensureAudioContext() {
@@ -356,6 +397,7 @@ async function playTone(type) {
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     const now = context.currentTime;
+    beepMutedUntil = Date.now() + preset.duration * 1000 + BEEP_MIC_MUTE_TAIL_MS;
     oscillator.type = preset.wave;
     oscillator.frequency.setValueAtTime(preset.frequency, now);
     gain.gain.setValueAtTime(0.0001, now);
@@ -493,7 +535,8 @@ function updateTimer() {
 }
 
 function updateRecessControls() {
-  elements.startRecessButton.textContent = recessRunning ? "▶️ Reanudar (Ya están callados)" : "▶️ Iniciar Descuento";
+  elements.startRecessButton.textContent = recessPaused ? "▶️ Reanudar (Ya están callados)" : "▶️ Iniciar Descuento";
+  elements.startRecessButton.hidden = recessRunning;
   elements.pauseRecessButton.hidden = !recessRunning;
   elements.carryButton.hidden = seconds <= 0;
   elements.groupSelect.disabled = recessRunning || groups.length === 0;
@@ -656,6 +699,8 @@ async function selectGroup(group) {
     return;
   }
   recessRunning = false;
+  recessPaused = false;
+  recessAutoHold = false;
   setLight("green");
   elements.selectedGroupLabel.textContent = group;
   elements.groupStatus.textContent = `Cargando el tiempo actualizado de ${group}...`;
@@ -682,7 +727,7 @@ async function selectGroup(group) {
 }
 
 async function startMicrophone() {
-  if (!selectedGroup || recessRunning || microphoneActive) return;
+  if (!selectedGroup || microphoneActive || (recessRunning && !settings.autoRecess)) return;
   if (!navigator.mediaDevices?.getUserMedia) {
     showMicPermissionHelp("Este navegador no ofrece acceso al micrófono. Usa la aplicación desde HTTPS en una versión actualizada del navegador.");
     return;
@@ -694,7 +739,10 @@ async function startMicrophone() {
     analyser = context.createAnalyser();
     analyser.fftSize = 8192;
     audioSource = context.createMediaStreamSource(mediaStream);
-    audioSource.connect(analyser);
+    micGainNode = context.createGain();
+    micGainNode.gain.value = dbToGain(settings.micGainDb);
+    audioSource.connect(micGainNode);
+    micGainNode.connect(analyser);
     sampleBuffer = new Float32Array(analyser.fftSize);
     microphoneActive = true;
     lastNoiseAt = Date.now();
@@ -733,6 +781,10 @@ async function stopMicrophone(save = true) {
     try { audioSource.disconnect(); } catch { /* Ya estaba desconectado. */ }
   }
   audioSource = null;
+  if (micGainNode) {
+    try { micGainNode.disconnect(); } catch { /* Ya estaba desconectado. */ }
+  }
+  micGainNode = null;
   analyser = null;
   sampleBuffer = null;
   if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
@@ -741,7 +793,15 @@ async function stopMicrophone(save = true) {
   elements.stopMicButton.hidden = true;
   elements.micState.textContent = "Modo manual";
   updateMeter(0);
-  if (!recessRunning) setLight("green");
+  if (recessRunning && settings.autoRecess) {
+    // Si se apaga el micro con el descuento automático en marcha, el descuento sigue sin automatizar.
+    settings.autoRecess = false;
+    persistSettings();
+    updateAutoRecessUi();
+    setRecessMessage("Micrófono detenido: el descuento continúa sin automatizar.");
+  }
+  recessAutoHold = false;
+  setLight(recessRunning ? "red" : "green");
   if (wasActive && save && selectedGroup) await guardarEnNube();
   refreshWakeLock();
 }
@@ -763,9 +823,13 @@ function sampleMicrophone() {
 
 function tick() {
   const now = Date.now();
+  const sinceLastTick = now - lastTickAt;
+  lastTickAt = now;
   sampleMicrophone();
 
   if (recessRunning) {
+    // En pausa automática el tiempo no corre: el final se retrasa lo mismo que ha pasado.
+    if (recessAutoHold) recessEndAt += sinceLastTick;
     seconds = Math.max(0, Math.ceil((recessEndAt - now) / 1000));
     updateTimer();
     if (now - lastRecessSavedAt >= 10000) {
@@ -775,18 +839,22 @@ function tick() {
     if (seconds <= 0) completeRecess();
   }
 
-  if (microphoneActive && !recessRunning) {
+  if (microphoneActive) {
     if (now - lastNoiseAt >= 1000) {
       const elapsed = now - lastNoiseAt + noiseRemainderMs;
       const wholeSeconds = Math.floor(elapsed / 1000);
       noiseRemainderMs = elapsed % 1000;
       lastNoiseAt = now;
-      if (now >= manualOverrideUntil) classifyNoise();
-      if (currentNoiseState === "red" && now >= manualOverrideUntil) {
-        setSeconds(seconds + wholeSeconds, false);
-        if (now - lastMicSavedAt >= 10000) {
-          lastMicSavedAt = now;
-          scheduleCloudSave(0);
+      if (recessRunning) {
+        if (settings.autoRecess) evaluateAutoRecess();
+      } else {
+        if (now >= manualOverrideUntil) classifyNoise();
+        if (currentNoiseState === "red" && now >= manualOverrideUntil) {
+          setSeconds(seconds + wholeSeconds, false);
+          if (now - lastMicSavedAt >= 10000) {
+            lastMicSavedAt = now;
+            scheduleCloudSave(0);
+          }
         }
       }
     }
@@ -796,14 +864,94 @@ function tick() {
   }
 }
 
+// Descuento automático: se llama una vez por segundo mientras corre el descuento con el micrófono activo.
+function evaluateAutoRecess() {
+  const state = noiseStateForLevel(latestLevel);
+  setLight(state); // solo visual: durante el recreo no suenan pitidos continuos
+  const tooLoud = settings.autoPauseOn === "yellow" ? state !== "green" : state === "red";
+  if (tooLoud) {
+    autoQuietSeconds = 0;
+    if (!recessAutoHold) {
+      recessAutoHold = true;
+      setRecessMessage("Pausa automática: hay demasiado ruido. El descuento se reanuda con silencio.", true);
+      playTone("danger");
+    }
+  } else if (recessAutoHold) {
+    autoQuietSeconds += 1;
+    if (autoQuietSeconds >= AUTO_RESUME_QUIET_SECONDS) {
+      recessAutoHold = false;
+      autoQuietSeconds = 0;
+      setRecessMessage("Descuento automático en curso: se pausa solo si hay ruido.");
+    } else {
+      setRecessMessage(`Hay silencio: el descuento se reanuda en ${AUTO_RESUME_QUIET_SECONDS - autoQuietSeconds} s.`, true);
+    }
+  }
+}
+
+async function toggleAutoRecess() {
+  settings.autoRecess = !settings.autoRecess;
+  persistSettings();
+  updateAutoRecessUi();
+  if (!recessRunning) return;
+  if (settings.autoRecess) {
+    await startMicrophone();
+    if (!microphoneActive) {
+      settings.autoRecess = false;
+      persistSettings();
+      updateAutoRecessUi();
+      setRecessMessage("No se pudo activar el micrófono: el descuento continúa sin automatizar.", true);
+      return;
+    }
+    setRecessMessage("Descuento automático en curso: se pausa solo si hay ruido.");
+  } else {
+    recessAutoHold = false;
+    autoQuietSeconds = 0;
+    await stopMicrophone(false);
+    setRecessMessage("Descuento en curso.");
+  }
+}
+
+function currentRecessRemaining() {
+  if (!recessRunning || recessAutoHold) return seconds;
+  return Math.max(0, Math.ceil((recessEndAt - Date.now()) / 1000));
+}
+
+// Parte común de pausar, terminar o pasar el tiempo a mañana: el micrófono del recreo se apaga.
+function endRecessRun() {
+  recessRunning = false;
+  recessAutoHold = false;
+  autoQuietSeconds = 0;
+  if (microphoneActive) stopMicrophone(false);
+}
+
 async function startOrResumeRecess() {
   if (!selectedGroup || seconds <= 0 || recessRunning) return;
-  await stopMicrophone(true);
+  recessAutoHold = false;
+  autoQuietSeconds = 0;
+  detenerTono();
+  let automated = false;
+  if (settings.autoRecess) {
+    if (!microphoneActive) await startMicrophone();
+    automated = microphoneActive;
+  } else {
+    await stopMicrophone(true);
+  }
+  if (recessRunning || seconds <= 0) return;
   recessRunning = true;
+  recessPaused = false;
   recessEndAt = Date.now() + seconds * 1000;
   lastRecessSavedAt = Date.now();
-  setLight("red");
-  setRecessMessage("Descuento en curso.");
+  lastNoiseAt = Date.now();
+  noiseRemainderMs = 0;
+  setLight(automated ? noiseStateForLevel(latestLevel) : "red");
+  if (automated) {
+    elements.groupStatus.textContent = "Descuento automático: el micrófono pausa el descuento si hay ruido.";
+    setRecessMessage("Descuento automático en curso: se pausa solo si hay ruido.");
+  } else if (settings.autoRecess) {
+    setRecessMessage("No se pudo usar el micrófono: el descuento corre sin automatizar.", true);
+  } else {
+    setRecessMessage("Descuento en curso.");
+  }
   updateRecessControls();
   scheduleCloudSave(0);
   refreshWakeLock();
@@ -812,12 +960,13 @@ async function startOrResumeRecess() {
 function pauseRecess() {
   if (!recessRunning) return;
   detenerTono();
-  seconds = Math.max(0, Math.ceil((recessEndAt - Date.now()) / 1000));
+  seconds = currentRecessRemaining();
   if (seconds <= 0) {
     completeRecess();
     return;
   }
-  recessRunning = false;
+  endRecessRun();
+  recessPaused = true;
   updateTimer();
   updateRecessControls();
   setLight("red");
@@ -830,7 +979,8 @@ function pauseRecess() {
 function completeRecess() {
   if (!recessRunning) return;
   detenerTono();
-  recessRunning = false;
+  endRecessRun();
+  recessPaused = false;
   seconds = 0;
   persistCurrentSeconds();
   updateTimer();
@@ -844,7 +994,7 @@ function completeRecess() {
 
 async function carryTimeToTomorrow() {
   if (!selectedGroup || seconds <= 0) return;
-  const remaining = recessRunning ? Math.max(0, Math.ceil((recessEndAt - Date.now()) / 1000)) : seconds;
+  const remaining = currentRecessRemaining();
   if (remaining <= 0) {
     completeRecess();
     return;
@@ -852,7 +1002,8 @@ async function carryTimeToTomorrow() {
   const accepted = window.confirm(`Se conservarán ${formatSeconds(remaining)} como tiempo pendiente para mañana. ¿Continuar?`);
   if (!accepted) return;
   detenerTono();
-  recessRunning = false;
+  endRecessRun();
+  recessPaused = false;
   seconds = remaining;
   updateTimer();
   updateRecessControls();
@@ -910,18 +1061,39 @@ elements.subtractButton.addEventListener("click", subtractManualTime);
 document.querySelectorAll("[data-add]").forEach((button) => button.addEventListener("click", () => addManualTime(Number(button.dataset.add))));
 
 function saveSettings() {
-  settings = { redThreshold: Number(elements.redThreshold.value), yellowGap: Number(elements.yellowGap.value) };
-  safeLocalStorageSet(SETTINGS_KEY, JSON.stringify(settings));
+  settings = {
+    ...settings,
+    redThreshold: Number(elements.redThreshold.value),
+    yellowGap: Number(elements.yellowGap.value),
+    micGainDb: Number(elements.micGain.value),
+    autoPauseOn: elements.autoPauseLevel.value
+  };
+  persistSettings();
+  applyMicGain();
+  updateMicGainLabel();
   updateMeter(latestLevel);
-  if (microphoneActive && Date.now() >= manualOverrideUntil) classifyNoise();
+  if (microphoneActive) {
+    if (recessRunning) {
+      if (settings.autoRecess) setLight(noiseStateForLevel(latestLevel));
+    } else if (Date.now() >= manualOverrideUntil) {
+      classifyNoise();
+    }
+  }
 }
 
 elements.redThreshold.min = "10";
 elements.redThreshold.max = "100";
 elements.redThreshold.value = String(settings.redThreshold);
 elements.yellowGap.value = String(settings.yellowGap);
+elements.micGain.value = String(settings.micGainDb);
+elements.autoPauseLevel.value = settings.autoPauseOn === "yellow" ? "yellow" : "red";
+updateMicGainLabel();
+updateAutoRecessUi();
 elements.redThreshold.addEventListener("input", saveSettings);
 elements.yellowGap.addEventListener("input", saveSettings);
+elements.micGain.addEventListener("input", saveSettings);
+elements.autoPauseLevel.addEventListener("change", saveSettings);
+elements.autoRecessButton.addEventListener("click", toggleAutoRecess);
 window.addEventListener("online", () => {
   if (!authenticated) return;
   if (selectedGroup) scheduleCloudSave(0);
